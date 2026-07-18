@@ -28,17 +28,16 @@ body {
    hunting through every rule that used it.
 --------------------------------------------------------- */
 :root {
-  /* --color-bg, --color-text-primary, --color-text-muted are no longer
-     static — js/core.js now overwrites all three, live, on the root
-     element's inline style as the user scrolls through Phase 4 ("Theme
-     Shift"), interpolating from these dark values to a bright light-blue/
-     white palette. An inline style always wins over this stylesheet rule
-     at equal-or-lower specificity, so these three lines below are really
-     just "what renders before JS finishes loading, and the values JS
-     tweens FROM" — not the permanent truth they used to be. See the
-     Teacher Mode note in core.js for how that interpolation is driven by
-     the exact same scroll-timeline progress as the 3D scene, so the page
-     chrome and the WebGL scene can never drift out of sync with each other. */
+  /* --color-bg, --color-text-primary, --color-text-muted are live again —
+     js/core.js overwrites all three, on the root element's inline style,
+     as the user scrolls through Arrival (86–100% of the runway) and the
+     Vanguard Node swallows the frame in white. An inline style always
+     wins over this stylesheet rule at equal-or-lower specificity, so
+     these three lines are "what renders before JS finishes loading, and
+     the values JS tweens FROM" — not the permanent truth. See Act 3 in
+     core.js's Teacher Mode for how that crossfade is driven by the exact
+     same `arrivalT` as the WebGL scene's background/fog color, so the
+     page chrome and the 3D scene can never drift out of sync. */
   --color-bg: #0d0d0f;            /* near-black, not pure #000 — see note below */
   --grain-opacity: 0.05;          /* deliberately subtle, tuned by eye */
   --color-text-muted: #9a9aa1;    /* ~6.95:1 contrast on --color-bg — logo, secondary text */
@@ -46,6 +45,12 @@ body {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
   --color-glow: 245, 245, 242; /* r,g,b only — alpha applied where it's used */
+
+  /* Driven live by js/core.js's renderForProgress — 0 while the hero
+     text is fully legible, ramping to 1 across the Approach phase as
+     the camera closes in on the chip, so the UI chrome is gone before
+     the Threshold dive begins. See --dive-fade usage below. */
+  --dive-fade: 0;
 }
 
 /* ---------------------------------------------------------
@@ -59,27 +64,27 @@ body {
 
    There used to be a fourth layer here — a pure-CSS mesh gradient
    (`.hero::before`) breathing behind everything. It's gone now, not
-   trimmed for performance: js/core.js's WebGL scene paints its own
-   mesh-gradient-style backdrop directly inside the 3D scene (so the
-   glass Monolith's shards have something real to refract — see that
-   file's Teacher Mode note), and now that the canvas is `position:
-   fixed` and fullscreen, that WebGL backdrop sits exactly where the
-   CSS one used to and is fully opaque. Keeping the CSS version running
-   underneath would have cost paint time for a layer that could never
-   actually be seen. `.hero__glow` and the grain stay — they still do
-   real, visible work sitting *in front of* the canvas.
+   trimmed for performance: js/core.js's WebGL scene owns the backdrop
+   itself — a solid `scene.background` color plus `THREE.FogExp2`, both
+   tuned to the same dark void the data-matrix tunnel fades into — and
+   now that the canvas is `position: fixed` and fullscreen, that WebGL
+   backdrop sits exactly where the CSS one used to and is fully opaque.
+   Keeping the CSS version running underneath would have cost paint time
+   for a layer that could never actually be seen. `.hero__glow` and the
+   grain stay — they still do real, visible work sitting *in front of*
+   the canvas.
 --------------------------------------------------------- */
 /* `position: sticky` + a tall spacer sibling (`.hero__scroll-runway`) right
-   after this section is what makes the scroll-linked Monolith possible at
-   all: the hero is exactly one screen tall, so with ordinary scrolling it
-   would scroll off-screen within the first ~100vh of scroll and the
-   explode effect would barely be visible before it's gone. Sticking the
-   hero to the top of the viewport for the length of the runway keeps it
-   in view while the user scrolls THROUGH that extra space, and
-   js/core.js reads how far into that runway they've scrolled to drive
-   the Monolith's scale/explode progress. Once the runway is exhausted,
-   the hero releases and scrolls away normally — there's nothing after it
-   yet (see Goal #10), so for now that's simply the end of the page. */
+   after this section is what makes the scroll-linked Neural Dive possible
+   at all: the hero is exactly one screen tall, so with ordinary scrolling it
+   would scroll off-screen within the first ~100vh of scroll and the dive
+   would barely be visible before it's gone. Sticking the hero to the top
+   of the viewport for the length of the runway keeps it in view while
+   the user scrolls THROUGH that extra space, and js/core.js reads how
+   far into that runway they've scrolled to drive the camera's fly-
+   through progress. Once the runway is exhausted, the hero releases and
+   scrolls away normally — there's nothing after it yet (see Goal #10),
+   so for now that's simply the end of the page. */
 .hero {
   position: sticky;
   top: 0;
@@ -104,11 +109,10 @@ body {
    give the sticky `.hero` above something to stay pinned against while
    js/core.js reads scroll progress through it. See the note on `.hero`.
 
-   320vh, not 80vh: js/core.js now maps this distance to a 3-act sequence
-   (solid → unfold → camera flythrough, see the Teacher Mode note at the
-   top of that file) rather than a single motion. A short runway would
-   compress all three acts into a blink; this gives each one room to
-   actually read as its own beat while scrolling. */
+   320vh, not 80vh: js/core.js maps this distance to "The Neural Dive" —
+   Approach, Threshold, Freefall (see the Teacher Mode note at the top of
+   that file). A short runway would compress all three phases into a
+   blink; this gives each one room to actually read as its own beat. */
 .hero__scroll-runway {
   height: 320vh;
   pointer-events: none;
@@ -156,6 +160,10 @@ body {
   filter: blur(400px);
   mix-blend-mode: soft-light;
   transform: translate(-50%, -50%) translate(var(--glow-x, 0px), var(--glow-y, 0px));
+  /* Same --dive-fade as .hero__content — this cursor-ambient light is
+     part of the "resting" hero read, not the dive itself, so it recedes
+     with the rest of the chrome once the camera starts closing in. */
+  opacity: calc(1 - var(--dive-fade, 0));
 }
 
 /* --- Layer 3: grain texture (topmost of the background layers) ---
@@ -213,6 +221,16 @@ body {
   gap: 2rem;
   max-width: 960px;
   padding: 2rem clamp(1.5rem, 6vw, 4rem) 2rem clamp(1.5rem, 8vw, 6rem);
+
+  /* Dissolves as the camera closes in on the chip — see --dive-fade in
+     :root and js/core.js's renderForProgress. A small downward drift
+     accompanies the fade so the text reads as "left behind," not just
+     erased. will-change here matches .hero__glow's reasoning below: this
+     updates every scroll frame during the Approach, so promoting it to
+     its own compositor layer up front avoids a mid-scroll layer promotion. */
+  opacity: calc(1 - var(--dive-fade, 0));
+  transform: translateY(calc(var(--dive-fade, 0) * 16px));
+  will-change: opacity, transform;
 }
 
 /* ---------------------------------------------------------
@@ -285,17 +303,13 @@ body {
 }
 
 /* ---------------------------------------------------------
-   HERO — VANGUARD CORE (3D): NOW THE ENVIRONMENT, NOT A WIDGET
+   HERO — THE NEURAL DIVE (3D): THE ENVIRONMENT, NOT A WIDGET
 
-   Previously an absolutely-positioned square sitting in the hero's
-   right-side whitespace — sized and masked to read as "an object
-   placed in the frame." That's gone: `position: fixed` + `inset: 0`
-   makes this the entire site's background, full viewport, at every
-   breakpoint (no more hiding it below 900px — there's no longer a
-   "the object's corner" to lose on narrow screens, since js/core.js
-   now places the Monolith in whichever corner it wants using real
-   Three.js world coordinates, computed from the camera's own frustum,
-   not CSS layout).
+   `position: fixed` + `inset: 0` makes this the entire site's
+   background, full viewport, at every breakpoint — js/core.js's Vanguard
+   Engine chip and the surrounding data-matrix tunnel are placed with
+   real Three.js world/camera coordinates, not CSS layout, so there's no
+   per-breakpoint positioning logic here to maintain.
 
    `position: fixed` here specifically (not `absolute`) is what makes it
    survive the page's scroll: a fixed element's position is computed
@@ -335,7 +349,10 @@ body {
   width: 1px;
   height: 2.5rem;
   background-color: var(--color-text-muted);
-  opacity: 0.35; /* static state for prefers-reduced-motion users, and the resting frame otherwise */
+  /* 0.35 is the resting-frame opacity (also the static state for
+     prefers-reduced-motion users); --dive-fade fades it out on top of
+     that as the camera closes in, same as .hero__content/.hero__glow. */
+  opacity: calc(0.35 * (1 - var(--dive-fade, 0)));
 }
 
 /* Below this height, there isn't reliably enough vertical room for
@@ -358,9 +375,15 @@ body {
   }
 }
 
+/* Reads --dive-fade directly rather than relying on the static
+   .hero__scroll-indicator rule above — an active `animation` fully
+   overrides a property for as long as it's running, so without this the
+   breathing loop would silently ignore --dive-fade the whole time it's
+   playing (custom properties ARE re-read live from keyframes, unlike a
+   plain animated value, so this does correctly follow the JS-driven fade). */
 @keyframes hero-scroll-breathe {
-  0%, 100% { opacity: 0.15; }
-  50%      { opacity: 0.6; }
+  0%, 100% { opacity: calc(0.15 * (1 - var(--dive-fade, 0))); }
+  50%      { opacity: calc(0.6 * (1 - var(--dive-fade, 0))); }
 }
 
 /* ---------------------------------------------------------
