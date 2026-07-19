@@ -1,11 +1,11 @@
 /* ---------------------------------------------------------
    RESET + TOKENS
 
-   Strict palette per the brief: obsidian / deep teal / white only —
-   no purples, no oranges, no "outer space" starfield colors. Everything
-   in this file (and every shader's uniforms) pulls from these same
-   values or from lib/constants.js's PALETTE — kept in sync by hand
-   since this is a scaffold, not generated from one shared token file.
+   One background (--color-obsidian) used top to bottom across every
+   section — no per-section color/theme shift. Strictly monochrome:
+   grays and white only (--color-white / --color-muted) for every
+   accent — buttons, wireframe line art, stat highlights, hover states.
+   No hue anywhere on the page.
 --------------------------------------------------------- */
 *,
 *::before,
@@ -16,12 +16,9 @@
 }
 
 :root {
-  --color-obsidian: #0a0a0a;
-  --color-obsidian-deep: #050505;
-  --color-teal: #0f6e56;
-  --color-teal-bright: #1fcf9e;
-  --color-white: #ffffff;
-  --color-sky: #eaf6ff;
+  --color-obsidian: #1d1d1f;
+  --color-white: #f5f5f7;
+  --color-muted: #a1a1a6;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -32,16 +29,44 @@ body {
   color: var(--color-white);
   font-family: var(--font-sans);
   overflow-x: hidden;
+  scroll-behavior: smooth;
 }
 
 a {
   color: inherit;
 }
 
+#root {
+  position: relative;
+  z-index: 2;
+}
+
+/* Subtle film-grain texture, tiled and blended into the background —
+   CSS/SVG only, no canvas/WebGL. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+
+/* Soft radial vignette for depth. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 35%, transparent 0%, transparent 45%, rgba(0, 0, 0, 0.4) 100%);
+}
+
 /* ---------------------------------------------------------
-   NAV — persistent, fades in only after Act 3 completes
-   (see components/layout/Nav.jsx, driven by the shared store's
-   `pinComplete`, not any local scroll math).
+   NAV — visible immediately, no fade-in sequence.
 --------------------------------------------------------- */
 .nav {
   position: fixed;
@@ -53,17 +78,8 @@ a {
   align-items: center;
   justify-content: space-between;
   padding: 1.25rem clamp(1.5rem, 5vw, 3rem);
-  opacity: 0;
-  transform: translateY(-12px);
-  pointer-events: none;
-  transition: opacity 0.6s ease, transform 0.6s ease;
-  background: linear-gradient(to bottom, rgba(10, 10, 10, 0.7), transparent);
-}
-
-.nav--visible {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
+  background: linear-gradient(to bottom, rgba(29, 29, 31, 0.85), rgba(29, 29, 31, 0));
+  backdrop-filter: blur(6px);
 }
 
 .nav__wordmark {
@@ -78,165 +94,138 @@ a {
   font-size: 0.9rem;
 }
 
-/* ---------------------------------------------------------
-   SCROLL PROGRESS — thin line + morphing dot, spans all five acts
-   (components/layout/ScrollProgress.jsx, driven by pageProgress).
---------------------------------------------------------- */
-.scroll-progress {
-  position: fixed;
-  right: 1.5rem;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 40vh;
-  z-index: 40;
-  pointer-events: none;
+.nav__links a {
+  text-decoration: none;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
 }
 
-.scroll-progress__track {
-  position: relative;
-  width: 2px;
-  height: 100%;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.scroll-progress__fill {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  background: var(--color-teal-bright);
-  transition: height 0.1s linear;
-}
-
-.scroll-progress__dot {
-  position: absolute;
-  left: 50%;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--color-white);
-  box-shadow: 0 0 8px var(--color-teal-bright);
-  transform: translate(-50%, -50%);
-  transition: top 0.1s linear;
-}
-
-/* ---------------------------------------------------------
-   PINNED ACTS (1-3) — the section GSAP actually pins. Fixed viewport
-   height regardless of what's mounted inside it (loading placeholder /
-   Canvas+captions / mobile fallback) — see PinnedActs.jsx's comment on
-   why that matters for ScrollTrigger's measurement.
---------------------------------------------------------- */
-.pinned-acts {
-  position: relative;
-  width: 100%;
-  height: 100dvh;
-  background: var(--color-obsidian);
-  overflow: hidden;
-}
-
-.pinned-acts__loading {
-  position: absolute;
-  inset: 0;
-  background: var(--color-obsidian);
-}
-
-.pinned-acts__canvas {
-  position: absolute;
-  inset: 0;
-}
-
-.act-caption {
-  position: absolute;
-  left: clamp(1.5rem, 8vw, 6rem);
-  top: 50%;
-  transform: translateY(-50%);
-  max-width: 720px;
-  pointer-events: none;
-}
-
-.act-caption--supernova {
-  left: 50%;
-  top: 62%;
-  transform: translate(-50%, 0);
-  text-align: center;
-  opacity: 0;
-  transition: opacity 0.5s ease;
-}
-
-.act-caption--visible {
+.nav__links a:hover {
   opacity: 1;
 }
 
-.act-caption__eyebrow {
-  font-size: 0.9rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-teal-bright);
-  margin-bottom: 0.75rem;
+/* ---------------------------------------------------------
+   SECTION DIVIDERS — thin, low-opacity lines between major sections
+   instead of any animated/scroll-driven transition.
+--------------------------------------------------------- */
+.section-divider {
+  max-width: 1100px;
+  margin: 0 auto;
+  height: 1px;
+  background: rgba(245, 245, 247, 0.08);
 }
 
-.act-caption__eyebrow--dark {
-  color: var(--color-teal);
+/* ---------------------------------------------------------
+   ENTRANCE ANIMATION — fade-in + slight upward slide, fired once via
+   hooks/useInView.js. Nothing scroll-scrubbed, nothing reversible.
+--------------------------------------------------------- */
+.fade-in-section {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
 }
 
-.act-caption__title {
-  font-size: clamp(2.25rem, 1rem + 6vw, 5.5rem);
+.fade-in-section.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in-section {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------
+   HERO
+--------------------------------------------------------- */
+.hero {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  align-items: center;
+  gap: clamp(2rem, 6vw, 5rem);
+  max-width: 1200px;
+  margin: 0 auto;
+  min-height: 92vh;
+  padding: clamp(6rem, 10vh, 8rem) clamp(1.5rem, 5vw, 3rem) 4rem;
+}
+
+.hero__label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--color-muted);
+  margin-bottom: 1.25rem;
+}
+
+.hero__title {
+  font-size: clamp(2.5rem, 1.5rem + 4vw, 4.25rem);
   font-weight: 300;
-  line-height: 1.05;
+  line-height: 1.08;
+  max-width: 14ch;
 }
 
-/* ---------------------------------------------------------
-   MOBILE FALLBACK — looped video in place of the particle pipeline;
-   see components/mobile/MobileHeroFallback.jsx.
---------------------------------------------------------- */
-.mobile-hero {
-  position: relative;
-  width: 100%;
-  height: 100%;
+.hero__subtext {
+  margin-top: 1.5rem;
+  color: var(--color-muted);
+  font-size: 1.1rem;
+  line-height: 1.6;
+  max-width: 42ch;
 }
 
-.mobile-hero__video {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.hero__copy .button {
+  margin-top: 2.25rem;
 }
 
-.mobile-hero__overlay {
-  position: absolute;
-  inset: 0;
+.hero__tagline {
+  margin-top: 1rem;
+  font-size: 0.9rem;
+  color: var(--color-muted);
+}
+
+.hero__visual {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  padding: 0 1.5rem;
-  background: linear-gradient(to bottom, rgba(5, 5, 5, 0.35), rgba(5, 5, 5, 0.65));
+  height: 100%;
+  min-height: 360px;
+}
+
+.hero__node {
+  position: relative;
+  width: min(60vw, 420px);
+  aspect-ratio: 1 / 1;
+}
+
+.hero__node-glow {
+  position: absolute;
+  inset: -20%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(245, 245, 247, 0.14) 0%, transparent 70%);
+  animation: node-glow-pulse 5s ease-in-out infinite;
+}
+
+@keyframes node-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(0.95);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero__node-glow {
+    animation: none;
+  }
 }
 
 /* ---------------------------------------------------------
-   ACT 4 — "THE NEW WORLD." Native scroll resumes here; see
-   components/acts/Act4NewWorld.jsx for the build-out TODOs.
+   STATS / PROOF SECTION
 --------------------------------------------------------- */
-.act4 {
-  position: relative;
-  background: var(--color-obsidian-deep);
-  padding-bottom: 6rem;
-}
-
-.act4__ambient-canvas {
-  position: absolute;
-  inset: 0;
-  height: 100%;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.act4__features,
-.optimization-proof {
-  position: relative;
-  z-index: 1;
-}
-
 .section-heading {
   font-size: clamp(1.75rem, 1rem + 3vw, 3rem);
   font-weight: 300;
@@ -246,17 +235,16 @@ a {
 
 .section-subheading {
   text-align: center;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--color-muted);
   max-width: 46ch;
   margin: 1rem auto 3rem;
 }
 
-/* --- Optimization proof stat bars --- */
 .optimization-proof__stats {
   display: flex;
   justify-content: center;
   gap: clamp(2rem, 6vw, 5rem);
-  padding: 0 1.5rem 4rem;
+  padding: 0 1.5rem 6rem;
   flex-wrap: wrap;
 }
 
@@ -273,7 +261,7 @@ a {
   height: 200px;
   display: flex;
   align-items: flex-end;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(245, 245, 247, 0.06);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -281,14 +269,14 @@ a {
 .stat-bar__baseline {
   position: absolute;
   inset: 0;
-  background: rgba(15, 110, 86, 0.25);
+  background: rgba(245, 245, 247, 0.1);
 }
 
 .stat-bar__fill {
   width: 100%;
   height: 100%;
   transform-origin: bottom;
-  background: var(--color-teal-bright);
+  background: var(--color-white);
 }
 
 .stat-bar__value {
@@ -301,63 +289,66 @@ a {
   display: block;
   font-size: 0.75rem;
   font-weight: 400;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--color-muted);
 }
 
 .stat-bar__label {
   margin-top: 0.35rem;
   font-size: 0.85rem;
   text-align: center;
-  color: rgba(255, 255, 255, 0.7);
-}
-
-/* --- Feature sections (recurring wireframe-to-solid reveal) --- */
-.feature-section {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  align-items: center;
-  gap: clamp(2rem, 6vw, 5rem);
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 4rem 1.5rem;
-}
-
-.feature-section--reverse {
-  direction: rtl;
-}
-
-.feature-section--reverse > * {
-  direction: ltr;
-}
-
-.feature-section__copy {
-  max-width: 46ch;
-}
-
-.feature-section__title {
-  font-size: clamp(1.5rem, 1rem + 2vw, 2.25rem);
-  font-weight: 400;
-  margin-bottom: 1rem;
-}
-
-.feature-section__description {
-  color: rgba(255, 255, 255, 0.65);
-  line-height: 1.6;
-  max-width: 46ch;
-}
-
-.wireframe-reveal,
-.feature-section__visual {
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  max-height: 320px;
+  color: var(--color-muted);
 }
 
 /* ---------------------------------------------------------
-   ACT 5 — THE INVITATION
+   FEATURE GRID — single compact 3-column grid, all visible together.
+--------------------------------------------------------- */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: clamp(2rem, 5vw, 3.5rem);
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 6rem 1.5rem;
+}
+
+.feature-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.wireframe-shape,
+.feature-card__visual {
+  width: 100%;
+  max-width: 160px;
+  aspect-ratio: 1 / 1;
+}
+
+.feature-card__title {
+  margin-top: 1.5rem;
+  font-size: 1.15rem;
+  font-weight: 500;
+}
+
+.feature-card__description {
+  margin-top: 0.6rem;
+  color: var(--color-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  max-width: 32ch;
+}
+
+@media (max-width: 860px) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------
+   CTA / FOOTER
 --------------------------------------------------------- */
 .invitation {
-  background: var(--color-obsidian-deep);
   text-align: center;
   padding: 8rem 1.5rem 3rem;
 }
@@ -368,7 +359,7 @@ a {
 }
 
 .invitation__subtitle {
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--color-muted);
   max-width: 46ch;
   margin: 1rem auto 2.5rem;
 }
@@ -386,7 +377,7 @@ a {
   border-radius: 999px;
   font-weight: 600;
   text-decoration: none;
-  transition: opacity 0.2s ease;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .button:hover {
@@ -394,13 +385,8 @@ a {
 }
 
 .button--primary {
-  background: var(--color-teal-bright);
+  background: var(--color-white);
   color: var(--color-obsidian);
-}
-
-.button--ghost {
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: var(--color-white);
 }
 
 .footer {
@@ -412,9 +398,9 @@ a {
   max-width: 1100px;
   margin: 0 auto;
   padding-top: 2rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid rgba(245, 245, 247, 0.1);
   font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--color-muted);
 }
 
 .footer__wordmark {
@@ -428,16 +414,63 @@ a {
   list-style: none;
 }
 
+.footer__links a {
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.footer__links a:hover {
+  color: var(--color-white);
+}
+
+.footer__github {
+  display: flex;
+  align-items: center;
+  transition: color 0.2s ease;
+}
+
+.footer__github:hover {
+  color: var(--color-white);
+}
+
 .footer__copyright {
   white-space: nowrap;
 }
 
 /* ---------------------------------------------------------
-   MOTION
+   RESPONSIVE
 --------------------------------------------------------- */
-@media (prefers-reduced-motion: reduce) {
-  .nav,
-  .act-caption--supernova {
-    transition: none;
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: 1fr;
+    text-align: center;
+    min-height: auto;
+    padding-top: 7rem;
+  }
+
+  .hero__copy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .hero__title {
+    max-width: 100%;
+  }
+
+  .hero__visual {
+    min-height: 280px;
+    margin-top: 2rem;
+  }
+}
+
+@media (max-width: 560px) {
+  .nav {
+    padding: 1rem 1.25rem;
+  }
+
+  .nav__links {
+    gap: 1rem;
+    font-size: 0.78rem;
   }
 }
