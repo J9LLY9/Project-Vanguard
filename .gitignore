@@ -11,3 +11,10 @@ dist/
 build/
 .idea/
 .vscode/
+
+# Compiled CLI binaries
+src/hardware_manager/hardware_manager
+src/engine/gpt2_engine
+
+# Model weight dumps (large, regenerate via prototypes/gpt2_export)
+*.bin
