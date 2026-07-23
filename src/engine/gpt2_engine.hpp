@@ -99,6 +99,13 @@ public:
     // floats (kGpt2NumHeads * kGpt2HeadDim).
     static constexpr size_t kHeadBufCount = static_cast<size_t>(kGpt2Embed);
 
+    // forward_step() also fills one column of attention_matrix, which is
+    // laid out [Head, max_seq_len] (kGpt2CtxLen doubling as max_seq_len)
+    // so the buffer only needs allocating once, up front, and later steps
+    // can fill in more of each head's row without reallocating.
+    static constexpr size_t kAttnMatrixCount =
+        static_cast<size_t>(kGpt2NumHeads) * kGpt2CtxLen;
+
     // Mmaps `path`, lays out host pointers, then allocates VRAM and
     // uploads the entire weight blob in one cudaMemcpy. Throws
     // std::runtime_error on any open/mmap/size/CUDA failure.
@@ -129,12 +136,19 @@ public:
     float* kBuf() const { return k_buf_; }
     float* vBuf() const { return v_buf_; }
 
+    // Device pointer, kAttnMatrixCount floats: [Head, max_seq_len] causally
+    // masked attention scores. Only column `position` of each head's row is
+    // valid after the most recent forward_step(); every other column reads
+    // -1e9 (see attention_scores_forward's comment for why).
+    float* attentionMatrix() const { return attention_matrix_; }
+
     // Embedding lookup for a single (token_id, position) pair:
     // hidden_state[i] = wte[token_id, i] + wpe[position, i]. Then projects
     // that hidden state through layer 0's c_attn weights into qkvOutput(),
-    // and splits the result into qBuf()/kBuf()/vBuf(). Throws if
-    // token_id/position are out of range, or if a kernel launch/execution
-    // fails.
+    // splits the result into qBuf()/kBuf()/vBuf(), and computes this
+    // token's causally-masked attention scores into attentionMatrix().
+    // Throws if token_id/position are out of range, or if a kernel
+    // launch/execution fails.
     void forward_step(int token_id, int position);
 
 private:
@@ -154,6 +168,7 @@ private:
     float* q_buf_ = nullptr;          // VRAM, kHeadBufCount floats
     float* k_buf_ = nullptr;          // VRAM, kHeadBufCount floats
     float* v_buf_ = nullptr;          // VRAM, kHeadBufCount floats
+    float* attention_matrix_ = nullptr; // VRAM, kAttnMatrixCount floats
     Gpt2Params device_params_{};
 };
 

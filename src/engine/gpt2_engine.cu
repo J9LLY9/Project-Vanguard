@@ -127,6 +127,51 @@ __global__ void permute_qkv(const float* qkv, float* q_buf, float* k_buf,
     v_buf[idx] = qkv[2 * per_section + flat];
 }
 
+// Score(head, key_pos) = (Q_head . K_head) / sqrt(head_dim). attention_matrix
+// is laid out [Head, max_seq_len] so the same buffer can be reused, one row
+// per head, as later forward_step calls fill in more of the sequence.
+//
+// q_buf_/k_buf_ hold only the current token (no KV-cache yet -- see
+// permute_qkv's comment), so key_pos == query_pos is the only column with a
+// real key to score against this step:
+//   - key_pos > query_pos is a genuine causal violation (a token attending
+//     to the future) and is masked to -1e9, per GPT-2's causal mask.
+//   - key_pos < query_pos would be a legitimate past token, but this engine
+//     doesn't persist past K vectors yet, so there's nothing to score
+//     against; it's masked to -1e9 too as a placeholder until a KV-cache
+//     lands, not because attending to the past is actually disallowed.
+//
+// One thread per (head, key_pos) pair, covering the full max_seq_len width
+// of the row.
+__global__ void attention_scores_forward(const float* q, const float* k,
+                                          float* attention_matrix,
+                                          int num_heads, int head_dim,
+                                          int query_pos, int max_seq_len) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = num_heads * max_seq_len;
+    if (idx >= total) return;
+
+    int head = idx / max_seq_len;
+    int key_pos = idx % max_seq_len;
+
+    if (key_pos > query_pos) {
+        attention_matrix[idx] = -1e9f; // future: real causal mask
+        return;
+    }
+    if (key_pos < query_pos) {
+        attention_matrix[idx] = -1e9f; // past: no KV-cache yet, TODO
+        return;
+    }
+
+    const float* q_head = q + head * head_dim;
+    const float* k_head = k + head * head_dim;
+    float dot = 0.0f;
+    for (int d = 0; d < head_dim; ++d) {
+        dot += q_head[d] * k_head[d];
+    }
+    attention_matrix[idx] = dot * (1.0f / sqrtf(64.0f));
+}
+
 } // namespace
 
 Gpt2Engine::Gpt2Engine(const std::string& path) {
@@ -159,6 +204,9 @@ Gpt2Engine::~Gpt2Engine() {
     }
     if (v_buf_ != nullptr) {
         cudaFree(v_buf_);
+    }
+    if (attention_matrix_ != nullptr) {
+        cudaFree(attention_matrix_);
     }
 }
 
@@ -232,6 +280,9 @@ void Gpt2Engine::uploadToDevice() {
                           kHeadBufCount * sizeof(float)));
     cudaCheck(cudaMalloc(reinterpret_cast<void**>(&v_buf_),
                           kHeadBufCount * sizeof(float)));
+
+    cudaCheck(cudaMalloc(reinterpret_cast<void**>(&attention_matrix_),
+                          kAttnMatrixCount * sizeof(float)));
 }
 
 void Gpt2Engine::forward_step(int token_id, int position) {
@@ -278,6 +329,17 @@ void Gpt2Engine::forward_step(int token_id, int position) {
 
     permute_qkv<<<permute_grid_size, permute_block_size>>>(
         qkv_output_, q_buf_, k_buf_, v_buf_, kGpt2NumHeads, kGpt2HeadDim);
+
+    cudaCheck(cudaGetLastError());
+    cudaCheck(cudaDeviceSynchronize());
+
+    const int attn_block_size = 256;
+    const int attn_total = kGpt2NumHeads * kGpt2CtxLen;
+    const int attn_grid_size = (attn_total + attn_block_size - 1) / attn_block_size;
+
+    attention_scores_forward<<<attn_grid_size, attn_block_size>>>(
+        q_buf_, k_buf_, attention_matrix_, kGpt2NumHeads, kGpt2HeadDim,
+        position, kGpt2CtxLen);
 
     cudaCheck(cudaGetLastError());
     cudaCheck(cudaDeviceSynchronize());

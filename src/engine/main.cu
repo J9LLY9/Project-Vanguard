@@ -59,6 +59,23 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 5; ++i) {
             std::printf("  [%d] = %.6f\n", 64 + i, q_head1[i]);
         }
+
+        // attention_matrix is [Head, max_seq_len]; the only valid column
+        // for this step is `position`, so index each head's row there.
+        float attn_head0 = 0.0f;
+        cudaCheck(cudaMemcpy(&attn_head0,
+                              engine.attentionMatrix() + 0 * 1024 + position,
+                              sizeof(float), cudaMemcpyDeviceToHost));
+
+        float attn_head1 = 0.0f;
+        cudaCheck(cudaMemcpy(&attn_head1,
+                              engine.attentionMatrix() + 1 * 1024 + position,
+                              sizeof(float), cudaMemcpyDeviceToHost));
+
+        std::printf("attention score, head 0 @ position %d: %.6f\n",
+                    position, attn_head0);
+        std::printf("attention score, head 1 @ position %d: %.6f\n",
+                    position, attn_head1);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return 1;
