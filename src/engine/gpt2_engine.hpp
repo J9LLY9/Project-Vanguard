@@ -37,6 +37,8 @@ constexpr int kGpt2Embed     = 768;
 constexpr int kGpt2NumLayers = 12;
 constexpr int kGpt2QkvOut    = 3 * kGpt2Embed; // 2304, combined q/k/v projection
 constexpr int kGpt2MlpHidden = 4 * kGpt2Embed; // 3072
+constexpr int kGpt2NumHeads  = 12;
+constexpr int kGpt2HeadDim   = kGpt2Embed / kGpt2NumHeads; // 64
 
 // Weights for a single transformer block. HuggingFace's GPT2 uses Conv1D
 // (not nn.Linear) for c_attn / c_proj / c_fc, which stores its weight as
@@ -89,6 +91,14 @@ public:
     // forward_step() writes one token's embedding: kGpt2Embed floats.
     static constexpr size_t kHiddenStateCount = static_cast<size_t>(kGpt2Embed);
 
+    // forward_step() also writes the QKV projection: kGpt2QkvOut floats.
+    static constexpr size_t kQkvOutputCount = static_cast<size_t>(kGpt2QkvOut);
+
+    // forward_step() also splits qkv_output into q_buf/k_buf/v_buf, each
+    // holding this one token's [Head, Head_Dimension] slice: kGpt2Embed
+    // floats (kGpt2NumHeads * kGpt2HeadDim).
+    static constexpr size_t kHeadBufCount = static_cast<size_t>(kGpt2Embed);
+
     // Mmaps `path`, lays out host pointers, then allocates VRAM and
     // uploads the entire weight blob in one cudaMemcpy. Throws
     // std::runtime_error on any open/mmap/size/CUDA failure.
@@ -109,10 +119,22 @@ public:
     // recent forward_step().
     float* hiddenState() const { return hidden_state_; }
 
+    // Device pointer, kQkvOutputCount floats: the c_attn (QKV) projection
+    // of the most recent forward_step().
+    float* qkvOutput() const { return qkv_output_; }
+
+    // Device pointers, kHeadBufCount floats each: this token's Q/K/V split
+    // into [Head, Head_Dimension] layout (head-major, 64 floats per head).
+    float* qBuf() const { return q_buf_; }
+    float* kBuf() const { return k_buf_; }
+    float* vBuf() const { return v_buf_; }
+
     // Embedding lookup for a single (token_id, position) pair:
-    // hidden_state[i] = wte[token_id, i] + wpe[position, i]. Result
-    // lands in hiddenState(). Throws if token_id/position are out of
-    // range, or if the kernel launch/execution fails.
+    // hidden_state[i] = wte[token_id, i] + wpe[position, i]. Then projects
+    // that hidden state through layer 0's c_attn weights into qkvOutput(),
+    // and splits the result into qBuf()/kBuf()/vBuf(). Throws if
+    // token_id/position are out of range, or if a kernel launch/execution
+    // fails.
     void forward_step(int token_id, int position);
 
 private:
@@ -128,6 +150,10 @@ private:
     // Device state
     float* device_weights_ = nullptr; // VRAM, kExpectedParamCount floats
     float* hidden_state_ = nullptr;   // VRAM, kHiddenStateCount floats
+    float* qkv_output_ = nullptr;     // VRAM, kQkvOutputCount floats
+    float* q_buf_ = nullptr;          // VRAM, kHeadBufCount floats
+    float* k_buf_ = nullptr;          // VRAM, kHeadBufCount floats
+    float* v_buf_ = nullptr;          // VRAM, kHeadBufCount floats
     Gpt2Params device_params_{};
 };
 

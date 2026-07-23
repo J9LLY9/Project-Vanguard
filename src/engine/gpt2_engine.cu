@@ -80,6 +80,53 @@ __global__ void encoder_forward(float* hidden_state, int token_id,
     hidden_state[i] = wte_row[i] + wpe_row[i];
 }
 
+// output[j] = dot(input, weight[:, j]) + bias[j]
+// weight is [in_features, out_features] (Conv1D export layout, not
+// transposed), so column j is the strided slice weight[i * out_features + j]
+// for i in [0, in_features). One thread per output element; threads in a
+// warp share consecutive j, so the load of weight[i * out_features + j] is
+// coalesced on every step of the loop.
+__global__ void linear_forward(const float* input, const float* weight,
+                                const float* bias, float* output,
+                                int in_features, int out_features) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= out_features) return;
+
+    float acc = 0.0f;
+    for (int i = 0; i < in_features; ++i) {
+        acc += input[i] * weight[i * out_features + j];
+    }
+    output[j] = acc + bias[j];
+}
+
+// Splits the flat qkv_output (Q|K|V concatenated, each kGpt2Embed wide)
+// into three separate per-head buffers. HF's Conv1D produces each of the
+// Q/K/V sections already head-major -- i.e. the first head_dim values of a
+// section are head 0's, the next head_dim are head 1's, etc. -- so
+// splitting into heads only requires locating the right section, not
+// reordering within it.
+//
+// Each output buffer holds one token's [Head, Sequence_Position,
+// Head_Dimension] slice; since a single forward_step covers exactly one
+// sequence position, that layout collapses to [Head, Head_Dimension]
+// here (head * head_dim + hd), which is where the KV-cache's per-position
+// stride would be added once this engine tracks more than one token.
+// One thread per (head, head_dim) pair.
+__global__ void permute_qkv(const float* qkv, float* q_buf, float* k_buf,
+                             float* v_buf, int num_heads, int head_dim) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int per_section = num_heads * head_dim;
+    if (idx >= per_section) return;
+
+    int head = idx / head_dim;
+    int hd = idx % head_dim;
+    int flat = head * head_dim + hd; // == idx, spelled out for clarity
+
+    q_buf[idx] = qkv[0 * per_section + flat];
+    k_buf[idx] = qkv[1 * per_section + flat];
+    v_buf[idx] = qkv[2 * per_section + flat];
+}
+
 } // namespace
 
 Gpt2Engine::Gpt2Engine(const std::string& path) {
@@ -100,6 +147,18 @@ Gpt2Engine::~Gpt2Engine() {
     }
     if (hidden_state_ != nullptr) {
         cudaFree(hidden_state_);
+    }
+    if (qkv_output_ != nullptr) {
+        cudaFree(qkv_output_);
+    }
+    if (q_buf_ != nullptr) {
+        cudaFree(q_buf_);
+    }
+    if (k_buf_ != nullptr) {
+        cudaFree(k_buf_);
+    }
+    if (v_buf_ != nullptr) {
+        cudaFree(v_buf_);
     }
 }
 
@@ -163,6 +222,16 @@ void Gpt2Engine::uploadToDevice() {
 
     cudaCheck(cudaMalloc(reinterpret_cast<void**>(&hidden_state_),
                           kHiddenStateCount * sizeof(float)));
+
+    cudaCheck(cudaMalloc(reinterpret_cast<void**>(&qkv_output_),
+                          kQkvOutputCount * sizeof(float)));
+
+    cudaCheck(cudaMalloc(reinterpret_cast<void**>(&q_buf_),
+                          kHeadBufCount * sizeof(float)));
+    cudaCheck(cudaMalloc(reinterpret_cast<void**>(&k_buf_),
+                          kHeadBufCount * sizeof(float)));
+    cudaCheck(cudaMalloc(reinterpret_cast<void**>(&v_buf_),
+                          kHeadBufCount * sizeof(float)));
 }
 
 void Gpt2Engine::forward_step(int token_id, int position) {
@@ -183,6 +252,32 @@ void Gpt2Engine::forward_step(int token_id, int position) {
     encoder_forward<<<grid_size, block_size>>>(
         hidden_state_, token_id, position, device_params_.wte,
         device_params_.wpe, kGpt2Embed);
+
+    cudaCheck(cudaGetLastError());
+    cudaCheck(cudaDeviceSynchronize());
+
+    // TODO: ln_1 (LayerNorm) isn't implemented yet -- this runs the c_attn
+    // projection directly on the raw embedding sum instead of the
+    // normalized hidden state. Swap `hidden_state_` for the ln_1 output
+    // once that kernel exists.
+    const int qkv_block_size = 256;
+    const int qkv_grid_size =
+        (kGpt2QkvOut + qkv_block_size - 1) / qkv_block_size;
+
+    linear_forward<<<qkv_grid_size, qkv_block_size>>>(
+        hidden_state_, device_params_.h[0].attn_c_attn_w,
+        device_params_.h[0].attn_c_attn_b, qkv_output_, kGpt2Embed,
+        kGpt2QkvOut);
+
+    cudaCheck(cudaGetLastError());
+    cudaCheck(cudaDeviceSynchronize());
+
+    const int permute_block_size = 256;
+    const int permute_grid_size =
+        (kGpt2Embed + permute_block_size - 1) / permute_block_size;
+
+    permute_qkv<<<permute_grid_size, permute_block_size>>>(
+        qkv_output_, q_buf_, k_buf_, v_buf_, kGpt2NumHeads, kGpt2HeadDim);
 
     cudaCheck(cudaGetLastError());
     cudaCheck(cudaDeviceSynchronize());

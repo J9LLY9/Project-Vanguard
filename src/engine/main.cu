@@ -31,6 +31,34 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 10; ++i) {
             std::printf("  [%d] = %.6f\n", i, h_out[i]);
         }
+
+        float qkv_out[10] = {};
+        cudaCheck(cudaMemcpy(qkv_out, engine.qkvOutput(), sizeof(qkv_out),
+                              cudaMemcpyDeviceToHost));
+
+        std::printf("qkv_output[0..9] for token %d @ position %d:\n",
+                    token_id, position);
+        for (int i = 0; i < 10; ++i) {
+            std::printf("  [%d] = %.6f\n", i, qkv_out[i]);
+        }
+
+        float q_head0[5] = {};
+        cudaCheck(cudaMemcpy(q_head0, engine.qBuf(), sizeof(q_head0),
+                              cudaMemcpyDeviceToHost));
+
+        float q_head1[5] = {};
+        cudaCheck(cudaMemcpy(q_head1, engine.qBuf() + 64, sizeof(q_head1),
+                              cudaMemcpyDeviceToHost));
+
+        std::printf("q_buf head 0 [0..4]:\n");
+        for (int i = 0; i < 5; ++i) {
+            std::printf("  [%d] = %.6f\n", i, q_head0[i]);
+        }
+
+        std::printf("q_buf head 1 [64..68]:\n");
+        for (int i = 0; i < 5; ++i) {
+            std::printf("  [%d] = %.6f\n", 64 + i, q_head1[i]);
+        }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return 1;
