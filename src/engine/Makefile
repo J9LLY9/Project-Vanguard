@@ -2,8 +2,8 @@ NVCC ?= nvcc
 NVCCFLAGS := -std=c++17 -O2
 
 TARGET := gpt2_engine
-SRCS := gpt2_engine.cu main.cu
-HEADERS := gpt2_engine.hpp
+SRCS := gpt2_engine.cu main.cu gpt2_tokenizer.cpp
+HEADERS := gpt2_engine.hpp gpt2_tokenizer.hpp
 
 .PHONY: all clean run
 

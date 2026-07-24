@@ -106,6 +106,29 @@ public:
     static constexpr size_t kAttnMatrixCount =
         static_cast<size_t>(kGpt2NumHeads) * kGpt2CtxLen;
 
+    // forward_step() also produces head_output: the Softmax-weighted sum
+    // of Values for this token, [Head, Head_Dimension] flattened the same
+    // way as q_buf_/k_buf_/v_buf_ -- kGpt2Embed floats.
+    static constexpr size_t kHeadOutputCount = static_cast<size_t>(kGpt2Embed);
+
+    // forward_step() also runs the rest of each transformer block -- each
+    // of these is a scratch buffer sized for one intermediate stage,
+    // reused by every one of the kGpt2NumLayers loop iterations: ln_1's
+    // output (ln1_buf_), attn.c_proj's output (attn_proj_buf_), ln_2's
+    // output (ln2_buf_), the MLP's up-projection/GELU activations
+    // (mlp_hidden_buf_), and mlp.c_proj's output (mlp_proj_buf_).
+    static constexpr size_t kLn1Count = static_cast<size_t>(kGpt2Embed);
+    static constexpr size_t kAttnProjCount = static_cast<size_t>(kGpt2Embed);
+    static constexpr size_t kLn2Count = static_cast<size_t>(kGpt2Embed);
+    static constexpr size_t kMlpHiddenCount =
+        static_cast<size_t>(kGpt2MlpHidden);
+    static constexpr size_t kMlpProjCount = static_cast<size_t>(kGpt2Embed);
+
+    // After the loop, forward_step() also applies ln_f and the classifier
+    // head (weight-tied to wte): kLogitsCount floats, one score per
+    // vocabulary entry.
+    static constexpr size_t kLogitsCount = static_cast<size_t>(kGpt2VocabSize);
+
     // Mmaps `path`, lays out host pointers, then allocates VRAM and
     // uploads the entire weight blob in one cudaMemcpy. Throws
     // std::runtime_error on any open/mmap/size/CUDA failure.
@@ -122,33 +145,67 @@ public:
     // Host pointers -- into the mmap'd file, read-only.
     const Gpt2Params& hostParams() const { return host_params_; }
 
-    // Device pointer, kHiddenStateCount floats: the output of the most
-    // recent forward_step().
+    // Device pointer, kHiddenStateCount floats: starts as this token's raw
+    // embedding, then forward_step() overwrites it in place twice per
+    // layer as each transformer block progresses -- once with the
+    // post-attention residual (input + attn.c_proj output), and again
+    // with the post-MLP residual (that + mlp.c_proj output), which becomes
+    // the next layer's input. After all kGpt2NumLayers iterations, it's
+    // overwritten once more by ln_f. After the most recent forward_step()
+    // returns, this is ln_f's output -- the classifier head's input.
     float* hiddenState() const { return hidden_state_; }
 
-    // Device pointer, kQkvOutputCount floats: the c_attn (QKV) projection
-    // of the most recent forward_step().
+    // Device pointer, kQkvOutputCount floats: the c_attn (QKV) projection,
+    // reused every layer -- holds layer (kGpt2NumLayers - 1)'s projection
+    // after the most recent forward_step().
     float* qkvOutput() const { return qkv_output_; }
 
     // Device pointers, kHeadBufCount floats each: this token's Q/K/V split
-    // into [Head, Head_Dimension] layout (head-major, 64 floats per head).
+    // into [Head, Head_Dimension] layout (head-major, 64 floats per head),
+    // reused every layer -- hold the last layer's split after the most
+    // recent forward_step().
     float* qBuf() const { return q_buf_; }
     float* kBuf() const { return k_buf_; }
     float* vBuf() const { return v_buf_; }
 
-    // Device pointer, kAttnMatrixCount floats: [Head, max_seq_len] causally
-    // masked attention scores. Only column `position` of each head's row is
-    // valid after the most recent forward_step(); every other column reads
-    // -1e9 (see attention_scores_forward's comment for why).
+    // Device pointer, kAttnMatrixCount floats: [Head, max_seq_len], reused
+    // every layer. Holds raw causally-masked attention scores right after
+    // attention_scores_forward, then attention_softmax_forward overwrites
+    // the same buffer in place with Softmax probabilities. Only columns
+    // [0, position] of each head's row are meaningful after the most
+    // recent forward_step(); columns beyond `position` are the future and
+    // read 0 probability (-1e9 pre-softmax). Holds the last layer's values.
     float* attentionMatrix() const { return attention_matrix_; }
 
+    // Device pointer, kHeadOutputCount floats: [Head, Head_Dimension]
+    // Softmax(scores) @ V for this token -- the attention head's output,
+    // fed into attn.c_proj at the start of the rest of each layer's block.
+    // Reused every layer; holds the last layer's value after the most
+    // recent forward_step().
+    float* headOutput() const { return head_output_; }
+
+    // Device pointer, kLogitsCount floats: logits[v] = dot(hiddenState()
+    // post-ln_f, wte[v, :]) -- one score per vocabulary entry, from the
+    // most recent forward_step(). Not yet a probability distribution; take
+    // an argmax or softmax over this on the caller side.
+    float* logits() const { return logits_; }
+
     // Embedding lookup for a single (token_id, position) pair:
-    // hidden_state[i] = wte[token_id, i] + wpe[position, i]. Then projects
-    // that hidden state through layer 0's c_attn weights into qkvOutput(),
-    // splits the result into qBuf()/kBuf()/vBuf(), and computes this
-    // token's causally-masked attention scores into attentionMatrix().
-    // Throws if token_id/position are out of range, or if a kernel
-    // launch/execution fails.
+    // hidden_state[i] = wte[token_id, i] + wpe[position, i]. Then runs all
+    // kGpt2NumLayers transformer blocks on that embedding in sequence,
+    // each one: LayerNorms (ln_1) the current hiddenState() and projects
+    // that through that layer's c_attn into qkvOutput(), splits into
+    // qBuf()/kBuf()/vBuf(), computes causally-masked attention into
+    // attentionMatrix(), weights V by it into headOutput(), projects that
+    // through attn.c_proj and residual-adds it back into hiddenState()
+    // (the un-normalized residual, not ln_1's output), LayerNorms (ln_2)
+    // that sum, runs the MLP (c_fc -> GELU -> c_proj) on the normalized
+    // value, and residual-adds the MLP's output back into hiddenState() --
+    // which becomes the next layer's input. After all layers, applies
+    // ln_f to hiddenState() in place, then runs the classifier head
+    // (weight-tied to wte) on that to produce logits(). Throws if
+    // token_id/position are out of range, or if a kernel launch/execution
+    // fails.
     void forward_step(int token_id, int position);
 
 private:
@@ -169,6 +226,13 @@ private:
     float* k_buf_ = nullptr;          // VRAM, kHeadBufCount floats
     float* v_buf_ = nullptr;          // VRAM, kHeadBufCount floats
     float* attention_matrix_ = nullptr; // VRAM, kAttnMatrixCount floats
+    float* head_output_ = nullptr;      // VRAM, kHeadOutputCount floats
+    float* attn_proj_buf_ = nullptr;    // VRAM, kAttnProjCount floats
+    float* ln2_buf_ = nullptr;          // VRAM, kLn2Count floats
+    float* mlp_hidden_buf_ = nullptr;   // VRAM, kMlpHiddenCount floats
+    float* ln1_buf_ = nullptr;          // VRAM, kLn1Count floats
+    float* mlp_proj_buf_ = nullptr;     // VRAM, kMlpProjCount floats
+    float* logits_ = nullptr;           // VRAM, kLogitsCount floats
     Gpt2Params device_params_{};
 };
 
