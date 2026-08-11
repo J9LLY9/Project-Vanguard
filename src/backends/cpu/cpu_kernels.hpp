@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <vector>
-#include "../core/types.hpp"
+#include "../../core/types.hpp"
 
 namespace vanguard {
 namespace cpu {

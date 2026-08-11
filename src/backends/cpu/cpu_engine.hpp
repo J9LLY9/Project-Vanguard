@@ -2,8 +2,8 @@
 
 #include <string>
 #include <vector>
-#include "../core/types.hpp"
-#include "../model/gpt2_weights.hpp"
+#include "../../core/types.hpp"
+#include "../../core/model/gpt2_weights.hpp"
 
 namespace vanguard {
 

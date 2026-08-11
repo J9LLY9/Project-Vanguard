@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <string>
-#include "../core/types.hpp"
+#include "../types.hpp"
 
 namespace vanguard {
 

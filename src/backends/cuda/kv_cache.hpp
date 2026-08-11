@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <cuda_runtime.h>
-#include "../core/types.hpp"
+#include "../../core/types.hpp"
 
 namespace vanguard {
 

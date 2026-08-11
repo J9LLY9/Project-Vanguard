@@ -40,22 +40,47 @@ Vanguard is an educational, high-performance C++/CUDA inference runtime for **GP
 ## Directory Structure
 
 ```text
-Project-Vanguard/
-├── Makefile                           # Unified build system
+Vanguard/
+├── docs/                              # Architecture specs & engineering principles
+├── research/                          # Systems research & notes
+├── assets/                            # Project media & documentation assets
+├── prototypes/                        # Exploratory prototypes & scripts
+│   ├── engine/                        # Early CUDA single-token engine prototype
+│   ├── gpt2_export/                   # PyTorch model weight export prototype
+│   └── hardware_manager/              # Standalone GPU telemetry scanner prototype
+│
+├── src/                               # Vanguard Core & Backend Source Code
+│   ├── core/                          # Platform-independent core components
+│   │   ├── model/                     # Model weights loader & BPE tokenizer
+│   │   ├── inference/                 # Inference orchestration (future)
+│   │   ├── memory/                    # Memory managers & workspace allocators (future)
+│   │   ├── scheduler/                 # Kernel execution scheduling (future)
+│   │   ├── optimizer/                 # Graph & kernel optimizers (future)
+│   │   ├── profiling/                 # Cross-platform profiling primitives (future)
+│   │   ├── tensor.hpp                 # Multi-dimensional TensorView templates
+│   │   └── types.hpp                  # GPT-2 124M specs & system precision types
+│   │
+│   ├── backends/                      # Platform- & hardware-specific backends
+│   │   ├── cpu/                       # Golden Reference CPU Engine & Kernels
+│   │   ├── cuda/                      # High-Performance CUDA Engine & KV-Cache
+│   │   └── metal/                     # Apple Metal GPU Backend (future)
+│   │
+│   └── runtime/                       # Hardware probe & system telemetry
+│
+├── apps/                              # User-facing applications
+│   ├── cli/                           # Desktop CLI inference engine
+│   └── ios/                           # Future Swift/SwiftUI iOS application
+│
+├── tests/                             # Test harnesses
+│   ├── unit/                          # Component unit tests (future)
+│   ├── integration/                   # CPU/CUDA golden assertion correctness tests
+│   └── benchmarks/                    # Performance & latency benchmarks (future)
+│
+├── scripts/                           # PyTorch export & verification python scripts
+├── CMakeLists.txt                     # Modern CMake build configuration
+├── Makefile                           # Unified Makefile build system
 ├── README.md                          # Project overview & roadmap
-├── gpt2_124M.bin                      # Mmap weight binary (124M float32 parameters)
-├── vocab.json                         # BPE Vocabulary lookup
-├── src/
-│   ├── core/                          # Constants & TensorView templates
-│   ├── model/                         # Mmap weight loader (Gpt2Params)
-│   ├── tokenizer/                     # BPE Tokenizer implementation
-│   ├── cpu/                           # Golden Reference CPU Engine & Kernels
-│   ├── cuda/                          # High-Performance CUDA Engine & Kernels
-│   └── runtime/                       # GPU Telemetry & Hardware Probe
-├── tests/                             # Numerical correctness & Golden assertion tests
-├── benchmarks/                        # Micro & End-to-End benchmarking suite
-├── scripts/                           # PyTorch export & golden tensor generation scripts
-└── archive/                           # Historical product vision documents
+└── .gitignore
 ```
 
 ---

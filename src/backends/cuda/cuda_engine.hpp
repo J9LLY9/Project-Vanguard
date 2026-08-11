@@ -6,8 +6,8 @@
 #include <string>
 #include <vector>
 #include <cuda_runtime.h>
-#include "../core/types.hpp"
-#include "../model/gpt2_weights.hpp"
+#include "../../core/types.hpp"
+#include "../../core/model/gpt2_weights.hpp"
 #include "kv_cache.hpp"
 
 namespace vanguard {

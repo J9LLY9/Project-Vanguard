@@ -3,8 +3,8 @@
 #include <exception>
 #include <iostream>
 #include <vector>
-#include "../src/cpu/cpu_engine.hpp"
-#include "../src/tokenizer/gpt2_tokenizer.hpp"
+#include "../../src/backends/cpu/cpu_engine.hpp"
+#include "../../src/core/model/gpt2_tokenizer.hpp"
 
 int main(int argc, char** argv) {
     std::string model_path = "gpt2_124M.bin";
