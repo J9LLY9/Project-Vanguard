@@ -11,8 +11,12 @@ namespace {
 
 constexpr float kSafetyCheckThreshold = 1e4f;
 
-void PrintSafetyCheck(const float* hidden_state, int layer, int embed_dim) {
+void PrintSafetyCheck(const float* hidden_state, int layer, int embed_dim,
+                       cudaStream_t stream) {
     std::vector<float> h(embed_dim);
+    // Reads a live device buffer for host printing, so the owning stream
+    // must be drained first -- this is a genuine host-needs-data sync.
+    cudaCheck(cudaStreamSynchronize(stream));
     cudaCheck(cudaMemcpy(h.data(), hidden_state, embed_dim * sizeof(float),
                           cudaMemcpyDeviceToHost));
 
@@ -255,6 +259,8 @@ __global__ void classifier_head_forward(const float* hidden_state,
 CudaEngine::CudaEngine(const std::string& model_path)
     : loader_(model_path), host_params_(loader_.params()) {
 
+    cudaCheck(cudaStreamCreate(&stream_));
+
     kv_cache_mgr_ = std::make_unique<KVCacheManager>();
 
     const size_t weights_bytes = kGpt2ExpectedParamCount * sizeof(float);
@@ -280,6 +286,12 @@ CudaEngine::CudaEngine(const std::string& model_path)
 }
 
 CudaEngine::~CudaEngine() {
+    if (stream_) {
+        // Buffers below are freed unconditionally right after; any kernel
+        // still in flight on stream_ must finish first.
+        cudaStreamSynchronize(stream_);
+        cudaStreamDestroy(stream_);
+    }
     if (device_weights_) cudaFree(device_weights_);
     if (hidden_state_) cudaFree(hidden_state_);
     if (qkv_output_) cudaFree(qkv_output_);
@@ -321,12 +333,11 @@ void CudaEngine::forward_step(int token_id, int position) {
     const int block_size = 256;
     const int grid_size = (kGpt2Embed + block_size - 1) / block_size;
 
-    encoder_forward<<<grid_size, block_size>>>(
+    encoder_forward<<<grid_size, block_size, 0, stream_>>>(
         hidden_state_, token_id, position, device_params_.wte,
         device_params_.wpe, kGpt2Embed);
 
     cudaCheck(cudaGetLastError());
-    cudaCheck(cudaDeviceSynchronize());
 
     for (int layer = 0; layer < kGpt2NumLayers; ++layer) {
         const Gpt2LayerWeights& w = device_params_.h[layer];
@@ -334,158 +345,142 @@ void CudaEngine::forward_step(int token_id, int position) {
         const int ln1_block_size = 256;
         const size_t ln1_shmem = ln1_block_size * sizeof(float);
 
-        layernorm_forward<<<1, ln1_block_size, ln1_shmem>>>(
+        layernorm_forward<<<1, ln1_block_size, ln1_shmem, stream_>>>(
             hidden_state_, w.ln_1_w, w.ln_1_b, ln1_buf_, kGpt2Embed);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int qkv_block_size = 256;
         const int qkv_grid_size = (kGpt2QkvOut + qkv_block_size - 1) / qkv_block_size;
 
-        linear_forward<<<qkv_grid_size, qkv_block_size>>>(
+        linear_forward<<<qkv_grid_size, qkv_block_size, 0, stream_>>>(
             ln1_buf_, w.attn_c_attn_w, w.attn_c_attn_b, qkv_output_, kGpt2Embed, kGpt2QkvOut);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int permute_block_size = 256;
         const int permute_grid_size = (kGpt2Embed + permute_block_size - 1) / permute_block_size;
 
-        permute_qkv<<<permute_grid_size, permute_block_size>>>(
+        permute_qkv<<<permute_grid_size, permute_block_size, 0, stream_>>>(
             qkv_output_, q_buf_, k_buf_, v_buf_, kGpt2NumHeads, kGpt2HeadDim);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         // --- Update Persistent KV Cache for current layer and position ---
         const int kv_block_size = 256;
         const int kv_grid_size = (kGpt2Embed + kv_block_size - 1) / kv_block_size;
 
-        update_kv_cache_kernel<<<kv_grid_size, kv_block_size>>>(
+        update_kv_cache_kernel<<<kv_grid_size, kv_block_size, 0, stream_>>>(
             kv_cache_mgr_->key_cache(), kv_cache_mgr_->value_cache(),
             k_buf_, v_buf_, layer, position, kGpt2Embed, kGpt2CtxLen);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         // --- Compute Attention Scores against KV Cache (0..position) ---
         const int attn_block_size = 256;
         const int attn_total = kGpt2NumHeads * kGpt2CtxLen;
         const int attn_grid_size = (attn_total + attn_block_size - 1) / attn_block_size;
 
-        kv_attention_scores_forward<<<attn_grid_size, attn_block_size>>>(
+        kv_attention_scores_forward<<<attn_grid_size, attn_block_size, 0, stream_>>>(
             q_buf_, kv_cache_mgr_->key_cache(), attention_matrix_,
             layer, kGpt2NumHeads, kGpt2HeadDim, position, kGpt2CtxLen);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         // --- Softmax Over Attention Scores ---
         const int softmax_block_size = 256;
         const size_t softmax_shmem = softmax_block_size * sizeof(float);
 
-        attention_softmax_forward<<<kGpt2NumHeads, softmax_block_size, softmax_shmem>>>(
+        attention_softmax_forward<<<kGpt2NumHeads, softmax_block_size, softmax_shmem, stream_>>>(
             attention_matrix_, kGpt2CtxLen, position);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         // --- Weighted Sum Over Stored Values in KV Cache ---
         const int value_block_size = 256;
         const int value_grid_size = (kGpt2Embed + value_block_size - 1) / value_block_size;
 
-        kv_attention_value_forward<<<value_grid_size, value_block_size>>>(
+        kv_attention_value_forward<<<value_grid_size, value_block_size, 0, stream_>>>(
             attention_matrix_, kv_cache_mgr_->value_cache(), head_output_,
             layer, kGpt2NumHeads, kGpt2HeadDim, kGpt2CtxLen, position);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int attn_proj_block_size = 256;
         const int attn_proj_grid_size = (kGpt2Embed + attn_proj_block_size - 1) / attn_proj_block_size;
 
-        linear_forward<<<attn_proj_grid_size, attn_proj_block_size>>>(
+        linear_forward<<<attn_proj_grid_size, attn_proj_block_size, 0, stream_>>>(
             head_output_, w.attn_c_proj_w, w.attn_c_proj_b, attn_proj_buf_, kGpt2Embed, kGpt2Embed);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int res1_block_size = 256;
         const int res1_grid_size = (kGpt2Embed + res1_block_size - 1) / res1_block_size;
 
-        residual_add<<<res1_grid_size, res1_block_size>>>(
+        residual_add<<<res1_grid_size, res1_block_size, 0, stream_>>>(
             hidden_state_, attn_proj_buf_, hidden_state_, kGpt2Embed);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int ln2_block_size = 256;
         const size_t ln2_shmem = ln2_block_size * sizeof(float);
 
-        layernorm_forward<<<1, ln2_block_size, ln2_shmem>>>(
+        layernorm_forward<<<1, ln2_block_size, ln2_shmem, stream_>>>(
             hidden_state_, w.ln_2_w, w.ln_2_b, ln2_buf_, kGpt2Embed);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int fc_block_size = 256;
         const int fc_grid_size = (kGpt2MlpHidden + fc_block_size - 1) / fc_block_size;
 
-        linear_forward<<<fc_grid_size, fc_block_size>>>(
+        linear_forward<<<fc_grid_size, fc_block_size, 0, stream_>>>(
             ln2_buf_, w.mlp_c_fc_w, w.mlp_c_fc_b, mlp_hidden_buf_, kGpt2Embed, kGpt2MlpHidden);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int gelu_block_size = 256;
         const int gelu_grid_size = (kGpt2MlpHidden + gelu_block_size - 1) / gelu_block_size;
 
-        gelu_forward<<<gelu_grid_size, gelu_block_size>>>(mlp_hidden_buf_, kGpt2MlpHidden);
+        gelu_forward<<<gelu_grid_size, gelu_block_size, 0, stream_>>>(mlp_hidden_buf_, kGpt2MlpHidden);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int mlp_proj_block_size = 256;
         const int mlp_proj_grid_size = (kGpt2Embed + mlp_proj_block_size - 1) / mlp_proj_block_size;
 
-        linear_forward<<<mlp_proj_grid_size, mlp_proj_block_size>>>(
+        linear_forward<<<mlp_proj_grid_size, mlp_proj_block_size, 0, stream_>>>(
             mlp_hidden_buf_, w.mlp_c_proj_w, w.mlp_c_proj_b, mlp_proj_buf_, kGpt2MlpHidden, kGpt2Embed);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         const int res2_block_size = 256;
         const int res2_grid_size = (kGpt2Embed + res2_block_size - 1) / res2_block_size;
 
-        residual_add<<<res2_grid_size, res2_block_size>>>(
+        residual_add<<<res2_grid_size, res2_block_size, 0, stream_>>>(
             hidden_state_, mlp_proj_buf_, hidden_state_, kGpt2Embed);
 
         cudaCheck(cudaGetLastError());
-        cudaCheck(cudaDeviceSynchronize());
 
         if (layer == 0 || layer == 1) {
-            PrintSafetyCheck(hidden_state_, layer, kGpt2Embed);
+            PrintSafetyCheck(hidden_state_, layer, kGpt2Embed, stream_);
         }
     }
 
     const int lnf_block_size = 256;
     const size_t lnf_shmem = lnf_block_size * sizeof(float);
 
-    layernorm_forward<<<1, lnf_block_size, lnf_shmem>>>(
+    layernorm_forward<<<1, lnf_block_size, lnf_shmem, stream_>>>(
         hidden_state_, device_params_.ln_f_w, device_params_.ln_f_b, hidden_state_, kGpt2Embed);
 
     cudaCheck(cudaGetLastError());
-    cudaCheck(cudaDeviceSynchronize());
 
     const int logits_block_size = 256;
     const int logits_grid_size = (kGpt2VocabSize + logits_block_size - 1) / logits_block_size;
 
-    classifier_head_forward<<<logits_grid_size, logits_block_size>>>(
+    classifier_head_forward<<<logits_grid_size, logits_block_size, 0, stream_>>>(
         hidden_state_, device_params_.wte, logits_, kGpt2Embed, kGpt2VocabSize);
 
     cudaCheck(cudaGetLastError());
-    cudaCheck(cudaDeviceSynchronize());
 }
 
 } // namespace vanguard

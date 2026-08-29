@@ -68,6 +68,7 @@ private:
     float* mlp_proj_buf_ = nullptr;
     float* logits_ = nullptr;
     Gpt2Params device_params_{};
+    cudaStream_t stream_ = nullptr;
 };
 
 } // namespace vanguard
