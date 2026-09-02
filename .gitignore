@@ -12,6 +12,19 @@ build/
 .idea/
 .vscode/
 
+# Build output directories
+bin/
+cmake-build-*/
+
+# Compiled objects & binaries
+*.o
+*.obj
+*.exe
+*.out
+*.a
+*.so
+*.dylib
+
 # Compiled CLI binaries
 src/hardware_manager/hardware_manager
 src/engine/gpt2_engine
